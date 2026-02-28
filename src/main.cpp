@@ -24,7 +24,7 @@ static inline void trim(std::string &s) {
     rtrim(s);
 }
 
-bool ExecuteMakeTable(Catalog &catalog, const std::string &query) {
+bool ExecuteMakeTable(Catalog &catalog, const std::string &query, bool is_replaying = false) {
     size_t start_paren = query.find('(');
     size_t end_paren = query.rfind(')');
     if (start_paren == std::string::npos || end_paren == std::string::npos) {
@@ -69,10 +69,10 @@ bool ExecuteMakeTable(Catalog &catalog, const std::string &query) {
 
     Schema schema(columns);
     if (catalog.CreateTable(table_part, schema)) {
-        LOG_INFO("Table '" << table_part << "' created successfully.");
+        if (!is_replaying) LOG_INFO("Table '" << table_part << "' created successfully.");
         return true;
     } else {
-        LOG_ERROR("Table '" << table_part << "' already exists.");
+        if (!is_replaying) LOG_ERROR("Table '" << table_part << "' already exists.");
         return false;
     }
 }
@@ -156,7 +156,7 @@ void ExecuteShowDatabase(Catalog &catalog, const std::string &db_name) {
     }
 }
 
-bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
+bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query, bool is_replaying = false) {
     size_t where_pos = query.find(" where ");
     if (where_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: remove from <table> where <col> = <val>");
@@ -211,11 +211,11 @@ bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
             ++it;
         }
     }
-    LOG_INFO("Removed " << removed << " rows.");
+    if (!is_replaying) LOG_INFO("Removed " << removed << " rows.");
     return true;
 }
 
-bool ExecuteChangeTable(Catalog &catalog, const std::string &query) {
+bool ExecuteChangeTable(Catalog &catalog, const std::string &query, bool is_replaying = false) {
     size_t set_pos = query.find(" set ");
     if (set_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: change <table> set <col> = <val>");
@@ -263,11 +263,11 @@ bool ExecuteChangeTable(Catalog &catalog, const std::string &query) {
     for (auto &tuple : table->tuples_) {
         tuple.SetValue(col_idx, new_val);
     }
-    LOG_INFO("Updated " << table->tuples_.size() << " rows.");
+    if (!is_replaying) LOG_INFO("Updated " << table->tuples_.size() << " rows.");
     return true;
 }
 
-bool ExecuteInsertInto(Catalog &catalog, const std::string &query) {
+bool ExecuteInsertInto(Catalog &catalog, const std::string &query, bool is_replaying = false) {
     size_t val_pos = query.find(" values ");
     if (val_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: insert into <table> values (v1, v2)");
@@ -321,7 +321,7 @@ bool ExecuteInsertInto(Catalog &catalog, const std::string &query) {
     }
 
     table->tuples_.emplace_back(row_values);
-    LOG_INFO("1 row inserted.");
+    if (!is_replaying) LOG_INFO("1 row inserted.");
     return true;
 }
 
@@ -340,10 +340,10 @@ void ReplayLog(Catalog& catalog, const std::string& db_file) {
     int count = 0;
     while (std::getline(in, query)) {
         trim(query);
-        if (query.rfind("make table", 0) == 0) ExecuteMakeTable(catalog, query);
-        else if (query.rfind("remove from", 0) == 0) ExecuteRemoveFrom(catalog, query);
-        else if (query.rfind("change", 0) == 0) ExecuteChangeTable(catalog, query);
-        else if (query.rfind("insert into", 0) == 0) ExecuteInsertInto(catalog, query);
+        if (query.rfind("make table", 0) == 0) ExecuteMakeTable(catalog, query, true);
+        else if (query.rfind("remove from", 0) == 0) ExecuteRemoveFrom(catalog, query, true);
+        else if (query.rfind("change", 0) == 0) ExecuteChangeTable(catalog, query, true);
+        else if (query.rfind("insert into", 0) == 0) ExecuteInsertInto(catalog, query, true);
         count++;
     }
     LOG_INFO("Replayed " << count << " operations from WAL log.");
