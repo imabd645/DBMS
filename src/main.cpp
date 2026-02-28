@@ -78,7 +78,8 @@ bool ExecuteMakeTable(Catalog &catalog, const std::string &query) {
 }
 
 void ExecuteShowAll(Catalog &catalog, const std::string &query) {
-    std::string table_name = query.substr(14);
+    size_t where_pos = query.find(" where ");
+    std::string table_name = (where_pos == std::string::npos) ? query.substr(14) : query.substr(14, where_pos - 14);
     trim(table_name);
     if (!table_name.empty() && table_name.back() == ';') table_name.pop_back();
 
@@ -88,19 +89,71 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
         return;
     }
 
+    std::string col_name, val_str;
+    int32_t filter_col_idx = -1;
+    if (where_pos != std::string::npos) {
+        std::string cond_part = query.substr(where_pos + 7);
+        trim(cond_part);
+
+        size_t eq_pos = cond_part.find('=');
+        if (eq_pos == std::string::npos) {
+            LOG_ERROR("Syntax error: missing '=' in where clause.");
+            return;
+        }
+
+        col_name = cond_part.substr(0, eq_pos);
+        val_str = cond_part.substr(eq_pos + 1);
+        trim(col_name); trim(val_str);
+        if (!val_str.empty() && val_str.back() == ';') val_str.pop_back();
+
+        filter_col_idx = table->schema_->GetColIdx(col_name);
+        if (filter_col_idx == -1) {
+            LOG_ERROR("Column '" << col_name << "' not found in table.");
+            return;
+        }
+    }
+
     const Schema &schema = *table->schema_;
     for (const auto &col : schema.GetColumns()) {
         std::cout << col.GetName() << "\t|\t";
     }
     std::cout << "\n------------------------------------------------------\n";
 
+    size_t count = 0;
     for (const auto &tuple : table->tuples_) {
-        for (uint32_t i = 0; i < schema.GetColumnCount(); ++i) {
-            std::cout << tuple.GetValue(&schema, i).ToString() << "\t|\t";
+        bool match = true;
+        if (filter_col_idx != -1) {
+            Value v = tuple.GetValue(&schema, filter_col_idx);
+            match = false;
+            if (v.GetTypeId() == TypeId::INTEGER && std::to_string(v.GetAsInt()) == val_str) match = true;
+            if (v.GetTypeId() == TypeId::VARCHAR && v.GetAsString() == val_str) match = true;
+            if (v.GetTypeId() == TypeId::VARCHAR && val_str.front() == '\'' && val_str.back() == '\'') {
+                std::string unquoted = val_str.substr(1, val_str.size() - 2);
+                if (v.GetAsString() == unquoted) match = true;
+            }
         }
-        std::cout << "\n";
+
+        if (match) {
+            for (uint32_t i = 0; i < schema.GetColumnCount(); ++i) {
+                std::cout << tuple.GetValue(&schema, i).ToString() << "\t|\t";
+            }
+            std::cout << "\n";
+            count++;
+        }
     }
-    LOG_INFO(table->tuples_.size() << " rows returned.");
+    LOG_INFO(count << " rows returned.");
+}
+
+void ExecuteShowDatabase(Catalog &catalog, const std::string &db_name) {
+    LOG_INFO("Tables in database '" << db_name << "':");
+    std::vector<std::string> tables = catalog.GetTableNames();
+    if (tables.empty()) {
+        std::cout << "(No tables found)\n";
+    } else {
+        for (const auto& name : tables) {
+            std::cout << "- " << name << "\n";
+        }
+    }
 }
 
 bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
@@ -328,6 +381,8 @@ int main(int argc, char* argv[]) {
             catalog = std::make_unique<Catalog>();
             LOG_INFO("Connected to database: " << db_file);
             ReplayLog(*catalog, db_file);
+        } else if (query.rfind("show database", 0) == 0 || query.rfind("show ", 0) == 0 && query.find("from") == std::string::npos) {
+            ExecuteShowDatabase(*catalog, db_file);
         } else if (query.rfind("make table", 0) == 0) {
             if (ExecuteMakeTable(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("show all from", 0) == 0) {

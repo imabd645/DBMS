@@ -38,6 +38,14 @@ public:
         return tables_[table_name].get();
     }
 
+    std::vector<std::string> GetTableNames() const {
+        std::vector<std::string> names;
+        for (const auto& pair : tables_) {
+            names.push_back(pair.first);
+        }
+        return names;
+    }
+
 private:
     std::unordered_map<std::string, std::unique_ptr<TableInfo>> tables_;
 };
