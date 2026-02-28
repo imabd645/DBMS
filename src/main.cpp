@@ -24,12 +24,12 @@ static inline void trim(std::string &s) {
     rtrim(s);
 }
 
-void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
+bool ExecuteMakeTable(Catalog &catalog, const std::string &query) {
     size_t start_paren = query.find('(');
     size_t end_paren = query.rfind(')');
     if (start_paren == std::string::npos || end_paren == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: make table <name> (col1 type1, ...)");
-        return;
+        return false;
     }
 
     std::string table_part = query.substr(10, start_paren - 10);
@@ -45,7 +45,7 @@ void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
         size_t space = col_def.find(' ');
         if (space == std::string::npos) {
             LOG_ERROR("Invalid column definition: " << col_def);
-            return;
+            return false;
         }
         std::string cname = col_def.substr(0, space);
         std::string ctype = col_def.substr(space + 1);
@@ -62,7 +62,7 @@ void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
             t = TypeId::VARCHAR;
         } else {
             LOG_ERROR("Unsupported type: " << ctype);
-            return;
+            return false;
         }
         columns.emplace_back(cname, t);
     }
@@ -70,8 +70,10 @@ void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
     Schema schema(columns);
     if (catalog.CreateTable(table_part, schema)) {
         LOG_INFO("Table '" << table_part << "' created successfully.");
+        return true;
     } else {
         LOG_ERROR("Table '" << table_part << "' already exists.");
+        return false;
     }
 }
 
@@ -101,11 +103,11 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
     LOG_INFO(table->tuples_.size() << " rows returned.");
 }
 
-void ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
+bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
     size_t where_pos = query.find(" where ");
     if (where_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: remove from <table> where <col> = <val>");
-        return;
+        return false;
     }
 
     std::string table_name = query.substr(12, where_pos - 12);
@@ -117,7 +119,7 @@ void ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
     size_t eq_pos = cond_part.find('=');
     if (eq_pos == std::string::npos) {
          LOG_ERROR("Syntax error: missing '=' in where clause.");
-         return;
+         return false;
     }
     
     std::string col_name = cond_part.substr(0, eq_pos);
@@ -128,13 +130,13 @@ void ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
     TableInfo *table = catalog.GetTable(table_name);
     if (!table) {
         LOG_ERROR("Table not found.");
-        return;
+        return false;
     }
 
     int32_t col_idx = table->schema_->GetColIdx(col_name);
     if (col_idx == -1) {
         LOG_ERROR("Column not found in table.");
-        return;
+        return false;
     }
 
     size_t removed = 0;
@@ -157,13 +159,14 @@ void ExecuteRemoveFrom(Catalog &catalog, const std::string &query) {
         }
     }
     LOG_INFO("Removed " << removed << " rows.");
+    return true;
 }
 
-void ExecuteChangeTable(Catalog &catalog, const std::string &query) {
+bool ExecuteChangeTable(Catalog &catalog, const std::string &query) {
     size_t set_pos = query.find(" set ");
     if (set_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: change <table> set <col> = <val>");
-        return;
+        return false;
     }
 
     std::string table_name = query.substr(7, set_pos - 7);
@@ -173,7 +176,7 @@ void ExecuteChangeTable(Catalog &catalog, const std::string &query) {
     size_t eq_pos = assgn_part.find('=');
     if (eq_pos == std::string::npos) {
         LOG_ERROR("Syntax error: missing '=' in set clause.");
-        return;
+        return false;
     }
 
     std::string col_name = assgn_part.substr(0, eq_pos);
@@ -184,13 +187,13 @@ void ExecuteChangeTable(Catalog &catalog, const std::string &query) {
     TableInfo *table = catalog.GetTable(table_name);
     if (!table) {
         LOG_ERROR("Table not found.");
-        return;
+        return false;
     }
 
     int32_t col_idx = table->schema_->GetColIdx(col_name);
     if (col_idx == -1) {
          LOG_ERROR("Column not found.");
-         return;
+         return false;
     }
 
     TypeId t = table->schema_->GetColumn(col_idx).GetType();
@@ -208,13 +211,14 @@ void ExecuteChangeTable(Catalog &catalog, const std::string &query) {
         tuple.SetValue(col_idx, new_val);
     }
     LOG_INFO("Updated " << table->tuples_.size() << " rows.");
+    return true;
 }
 
-void ExecuteInsertInto(Catalog &catalog, const std::string &query) {
+bool ExecuteInsertInto(Catalog &catalog, const std::string &query) {
     size_t val_pos = query.find(" values ");
     if (val_pos == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: insert into <table> values (v1, v2)");
-        return;
+        return false;
     }
 
     std::string table_name = query.substr(12, val_pos - 12);
@@ -223,14 +227,14 @@ void ExecuteInsertInto(Catalog &catalog, const std::string &query) {
     TableInfo *table = catalog.GetTable(table_name);
     if (!table) {
         LOG_ERROR("Table not found.");
-        return;
+        return false;
     }
 
     size_t start_paren = query.find('(', val_pos);
     size_t end_paren = query.find(')', start_paren);
     if (start_paren == std::string::npos || end_paren == std::string::npos) {
         LOG_ERROR("Syntax error in values list.");
-        return;
+        return false;
     }
 
     std::string vals_part = query.substr(start_paren + 1, end_paren - start_paren - 1);
@@ -243,7 +247,7 @@ void ExecuteInsertInto(Catalog &catalog, const std::string &query) {
         trim(val_tok);
         if (col_idx >= table->schema_->GetColumnCount()) {
             LOG_ERROR("Too many values provided.");
-            return;
+            return false;
         }
 
         TypeId expected_type = table->schema_->GetColumn(col_idx).GetType();
@@ -260,11 +264,36 @@ void ExecuteInsertInto(Catalog &catalog, const std::string &query) {
 
     if (row_values.size() != table->schema_->GetColumnCount()) {
         LOG_ERROR("Not enough values provided.");
-        return;
+        return false;
     }
 
     table->tuples_.emplace_back(row_values);
     LOG_INFO("1 row inserted.");
+    return true;
+}
+
+void AppendToLog(const std::string& db_file, const std::string& query) {
+    std::ofstream out(db_file + ".log", std::ios::app);
+    if (out.is_open()) {
+        out << query << "\n";
+    }
+}
+
+void ReplayLog(Catalog& catalog, const std::string& db_file) {
+    std::ifstream in(db_file + ".log");
+    if (!in.is_open()) return;
+    
+    std::string query;
+    int count = 0;
+    while (std::getline(in, query)) {
+        trim(query);
+        if (query.rfind("make table", 0) == 0) ExecuteMakeTable(catalog, query);
+        else if (query.rfind("remove from", 0) == 0) ExecuteRemoveFrom(catalog, query);
+        else if (query.rfind("change", 0) == 0) ExecuteChangeTable(catalog, query);
+        else if (query.rfind("insert into", 0) == 0) ExecuteInsertInto(catalog, query);
+        count++;
+    }
+    LOG_INFO("Replayed " << count << " operations from WAL log.");
 }
 
 int main(int argc, char* argv[]) {
@@ -278,6 +307,9 @@ int main(int argc, char* argv[]) {
     // Initialize storage subsystem to fulfill architecture requirements
     auto disk_manager = std::make_unique<DiskManager>(db_file);
     auto catalog = std::make_unique<Catalog>();
+    
+    // Replay log to restore state
+    ReplayLog(*catalog, db_file);
 
     std::string query;
     while (true) {
@@ -295,16 +327,17 @@ int main(int argc, char* argv[]) {
             disk_manager = std::make_unique<DiskManager>(db_file);
             catalog = std::make_unique<Catalog>();
             LOG_INFO("Connected to database: " << db_file);
+            ReplayLog(*catalog, db_file);
         } else if (query.rfind("make table", 0) == 0) {
-            ExecuteMakeTable(*catalog, query);
+            if (ExecuteMakeTable(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("show all from", 0) == 0) {
             ExecuteShowAll(*catalog, query);
         } else if (query.rfind("remove from", 0) == 0) {
-            ExecuteRemoveFrom(*catalog, query);
+            if (ExecuteRemoveFrom(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("change", 0) == 0) {
-            ExecuteChangeTable(*catalog, query);
+            if (ExecuteChangeTable(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("insert into", 0) == 0) {
-            ExecuteInsertInto(*catalog, query);
+            if (ExecuteInsertInto(*catalog, query)) AppendToLog(db_file, query);
         } else {
             LOG_ERROR("Unknown command: " << query);
         }
