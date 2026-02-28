@@ -4,6 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <memory>
 
 #include "common/logger.h"
 #include "storage/disk_manager.h"
@@ -266,12 +267,17 @@ void ExecuteInsertInto(Catalog &catalog, const std::string &query) {
     LOG_INFO("1 row inserted.");
 }
 
-int main() {
-    LOG_INFO("SimpleDBMS starting... Type 'exit' to quit.");
+int main(int argc, char* argv[]) {
+    std::string db_file = "data.db";
+    if (argc > 1) {
+        db_file = argv[1];
+    }
+
+    LOG_INFO("SimpleDBMS starting on database: " << db_file << " ... Type 'exit' to quit.");
     
     // Initialize storage subsystem to fulfill architecture requirements
-    DiskManager disk_manager("data.db");
-    Catalog catalog;
+    auto disk_manager = std::make_unique<DiskManager>(db_file);
+    auto catalog = std::make_unique<Catalog>();
 
     std::string query;
     while (true) {
@@ -282,16 +288,23 @@ int main() {
         if (query == "exit" || query == "quit") break;
         if (query.empty()) continue;
 
-        if (query.rfind("make table", 0) == 0) {
-            ExecuteMakeTable(catalog, query);
+        if (query.rfind("connect ", 0) == 0) {
+            db_file = query.substr(8);
+            trim(db_file);
+            if (!db_file.empty() && db_file.back() == ';') db_file.pop_back();
+            disk_manager = std::make_unique<DiskManager>(db_file);
+            catalog = std::make_unique<Catalog>();
+            LOG_INFO("Connected to database: " << db_file);
+        } else if (query.rfind("make table", 0) == 0) {
+            ExecuteMakeTable(*catalog, query);
         } else if (query.rfind("show all from", 0) == 0) {
-            ExecuteShowAll(catalog, query);
+            ExecuteShowAll(*catalog, query);
         } else if (query.rfind("remove from", 0) == 0) {
-            ExecuteRemoveFrom(catalog, query);
+            ExecuteRemoveFrom(*catalog, query);
         } else if (query.rfind("change", 0) == 0) {
-            ExecuteChangeTable(catalog, query);
+            ExecuteChangeTable(*catalog, query);
         } else if (query.rfind("insert into", 0) == 0) {
-            ExecuteInsertInto(catalog, query);
+            ExecuteInsertInto(*catalog, query);
         } else {
             LOG_ERROR("Unknown command: " << query);
         }
