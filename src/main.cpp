@@ -380,6 +380,8 @@ int main(int argc, char* argv[]) {
             catalog = std::make_unique<Catalog>();
             LOG_INFO("Connected to database: " << db_file);
             ReplayLog(*catalog, db_file);
+        } else if (!catalog) {
+            LOG_ERROR("No database connected! Please run 'connect <db>' first.");
         } else if (query == "show" || query.rfind("show database", 0) == 0 || (query.rfind("show ", 0) == 0 && query.find("from") == std::string::npos)) {
             ExecuteShowDatabase(*catalog, db_file);
         } else if (query.rfind("make table", 0) == 0) {
