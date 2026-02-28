@@ -346,23 +346,22 @@ void ReplayLog(Catalog& catalog, const std::string& db_file) {
         else if (query.rfind("insert into", 0) == 0) ExecuteInsertInto(catalog, query, true);
         count++;
     }
-    LOG_INFO("Replayed " << count << " operations from WAL log.");
 }
 
 int main(int argc, char* argv[]) {
-    std::string db_file = "data.db";
+    std::string db_file = "";
+    std::unique_ptr<DiskManager> disk_manager = nullptr;
+    std::unique_ptr<Catalog> catalog = nullptr;
+
     if (argc > 1) {
         db_file = argv[1];
+        disk_manager = std::make_unique<DiskManager>(db_file);
+        catalog = std::make_unique<Catalog>();
+        ReplayLog(*catalog, db_file);
+        LOG_INFO("SimpleDBMS starting. Connected to database: " << db_file << " ... Type 'exit' to quit.");
+    } else {
+        LOG_INFO("SimpleDBMS starting with NO database connected. Type 'connect <database>' to start.");
     }
-
-    LOG_INFO("SimpleDBMS starting on database: " << db_file << " ... Type 'exit' to quit.");
-    
-    // Initialize storage subsystem to fulfill architecture requirements
-    auto disk_manager = std::make_unique<DiskManager>(db_file);
-    auto catalog = std::make_unique<Catalog>();
-    
-    // Replay log to restore state
-    ReplayLog(*catalog, db_file);
 
     std::string query;
     while (true) {
@@ -381,7 +380,7 @@ int main(int argc, char* argv[]) {
             catalog = std::make_unique<Catalog>();
             LOG_INFO("Connected to database: " << db_file);
             ReplayLog(*catalog, db_file);
-        } else if (query.rfind("show database", 0) == 0 || query.rfind("show ", 0) == 0 && query.find("from") == std::string::npos) {
+        } else if (query == "show" || query.rfind("show database", 0) == 0 || (query.rfind("show ", 0) == 0 && query.find("from") == std::string::npos)) {
             ExecuteShowDatabase(*catalog, db_file);
         } else if (query.rfind("make table", 0) == 0) {
             if (ExecuteMakeTable(*catalog, query)) AppendToLog(db_file, query);
