@@ -25,7 +25,7 @@ static inline void trim(std::string &s) {
 
 void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
     size_t start_paren = query.find('(');
-    size_t end_paren = query.find(')');
+    size_t end_paren = query.rfind(')');
     if (start_paren == std::string::npos || end_paren == std::string::npos) {
         LOG_ERROR("Syntax error. Expected: make table <name> (col1 type1, ...)");
         return;
@@ -50,10 +50,16 @@ void ExecuteMakeTable(Catalog &catalog, const std::string &query) {
         std::string ctype = col_def.substr(space + 1);
         trim(cname); trim(ctype);
 
+        std::string upper_ctype = ctype;
+        std::transform(upper_ctype.begin(), upper_ctype.end(), upper_ctype.begin(), ::toupper);
+
         TypeId t = TypeId::INVALID;
-        if (ctype == "INT" || ctype == "int" || ctype == "INTEGER") t = TypeId::INTEGER;
-        else if (ctype == "VARCHAR" || ctype == "varchar" || ctype == "STRING") t = TypeId::VARCHAR;
-        else {
+        if (upper_ctype == "INT" || upper_ctype == "INTEGER") {
+            t = TypeId::INTEGER;
+        } else if (upper_ctype == "VARCHAR" || upper_ctype == "STRING" || 
+                   upper_ctype.find("VARCHAR(") == 0 || upper_ctype.find("STRING(") == 0) {
+            t = TypeId::VARCHAR;
+        } else {
             LOG_ERROR("Unsupported type: " << ctype);
             return;
         }
