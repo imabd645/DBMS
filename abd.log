@@ -1,2 +1,5 @@
 make table abc (id int ,name varchar)
 insert into abc values (3,"Abdullah Masood")
+insert into abc values (5,"Maaz Hassan")
+insert into abc values (7,"Faraz Ahmad")
+insert into abc values (7,"Arshman Ali")

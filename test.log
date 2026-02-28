@@ -1,0 +1,4 @@
+make table users (id int, name varchar)
+insert into users values (1, 'alice')
+insert into users values (2, 'bob')
+delete from users where id = 1

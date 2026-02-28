@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <memory>
+#include <iomanip>
 
 #include "common/logger.h"
 #include "storage/disk_manager.h"
@@ -115,7 +116,7 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
 
     const Schema &schema = *table->schema_;
     for (const auto &col : schema.GetColumns()) {
-        std::cout << col.GetName() << "\t|\t";
+        std::cout << std::left << std::setw(20) << col.GetName() << " | ";
     }
     std::cout << "\n------------------------------------------------------\n";
 
@@ -135,7 +136,7 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
 
         if (match) {
             for (uint32_t i = 0; i < schema.GetColumnCount(); ++i) {
-                std::cout << tuple.GetValue(&schema, i).ToString() << "\t|\t";
+                std::cout << std::left << std::setw(20) << tuple.GetValue(&schema, i).ToString() << " | ";
             }
             std::cout << "\n";
             count++;
@@ -212,6 +213,65 @@ bool ExecuteRemoveFrom(Catalog &catalog, const std::string &query, bool is_repla
         }
     }
     if (!is_replaying) LOG_INFO("Removed " << removed << " rows.");
+    return true;
+}
+
+bool ExecuteDeleteFrom(Catalog &catalog, const std::string &query, bool is_replaying = false) {
+    size_t where_pos = query.find(" where ");
+    if (where_pos == std::string::npos) {
+        LOG_ERROR("Syntax error. Expected: delete from <table> where <col> = <val>");
+        return false;
+    }
+
+    std::string table_name = query.substr(12, where_pos - 12);
+    trim(table_name);
+
+    std::string cond_part = query.substr(where_pos + 7);
+    trim(cond_part);
+
+    size_t eq_pos = cond_part.find('=');
+    if (eq_pos == std::string::npos) {
+         LOG_ERROR("Syntax error: missing '=' in where clause.");
+         return false;
+    }
+    
+    std::string col_name = cond_part.substr(0, eq_pos);
+    std::string val_str = cond_part.substr(eq_pos + 1);
+    trim(col_name); trim(val_str);
+    if (!val_str.empty() && val_str.back() == ';') val_str.pop_back();
+
+    TableInfo *table = catalog.GetTable(table_name);
+    if (!table) {
+        LOG_ERROR("Table not found.");
+        return false;
+    }
+
+    int32_t col_idx = table->schema_->GetColIdx(col_name);
+    if (col_idx == -1) {
+        LOG_ERROR("Column not found in table.");
+        return false;
+    }
+
+    size_t removed = 0;
+    auto it = table->tuples_.begin();
+    while (it != table->tuples_.end()) {
+        Value v = it->GetValue(table->schema_.get(), col_idx);
+        bool match = false;
+        if (v.GetTypeId() == TypeId::INTEGER && std::to_string(v.GetAsInt()) == val_str) match = true;
+        if (v.GetTypeId() == TypeId::VARCHAR && v.GetAsString() == val_str) match = true;
+        if (v.GetTypeId() == TypeId::VARCHAR && val_str.front() == '\'' && val_str.back() == '\'') {
+             std::string unquoted = val_str.substr(1, val_str.size() - 2);
+             if (v.GetAsString() == unquoted) match = true;
+        }
+
+        if (match) {
+            it = table->tuples_.erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+    if (!is_replaying) LOG_INFO("Deleted " << removed << " rows.");
     return true;
 }
 
@@ -342,6 +402,7 @@ void ReplayLog(Catalog& catalog, const std::string& db_file) {
         trim(query);
         if (query.rfind("make table", 0) == 0) ExecuteMakeTable(catalog, query, true);
         else if (query.rfind("remove from", 0) == 0) ExecuteRemoveFrom(catalog, query, true);
+        else if (query.rfind("delete from", 0) == 0) ExecuteDeleteFrom(catalog, query, true);
         else if (query.rfind("change", 0) == 0) ExecuteChangeTable(catalog, query, true);
         else if (query.rfind("insert into", 0) == 0) ExecuteInsertInto(catalog, query, true);
         count++;
@@ -390,6 +451,8 @@ int main(int argc, char* argv[]) {
             ExecuteShowAll(*catalog, query);
         } else if (query.rfind("remove from", 0) == 0) {
             if (ExecuteRemoveFrom(*catalog, query)) AppendToLog(db_file, query);
+        } else if (query.rfind("delete from", 0) == 0) {
+            if (ExecuteDeleteFrom(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("change", 0) == 0) {
             if (ExecuteChangeTable(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("insert into", 0) == 0) {
