@@ -78,9 +78,18 @@ bool ExecuteMakeTable(Catalog &catalog, const std::string &query, bool is_replay
     }
 }
 
-void ExecuteShowAll(Catalog &catalog, const std::string &query) {
-    size_t where_pos = query.find(" where ");
-    std::string table_name = (where_pos == std::string::npos) ? query.substr(14) : query.substr(14, where_pos - 14);
+void ExecuteShow(Catalog &catalog, const std::string &query) {
+    size_t from_pos = query.find(" from ");
+    if (from_pos == std::string::npos || from_pos <= 5) {
+        LOG_ERROR("Syntax error. Expected: show <cols> from <table>");
+        return;
+    }
+    
+    std::string cols_part = query.substr(5, from_pos - 5);
+    trim(cols_part);
+
+    size_t where_pos = query.find(" where ", from_pos);
+    std::string table_name = (where_pos == std::string::npos) ? query.substr(from_pos + 6) : query.substr(from_pos + 6, where_pos - (from_pos + 6));
     trim(table_name);
     if (!table_name.empty() && table_name.back() == ';') table_name.pop_back();
 
@@ -88,6 +97,36 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
     if (!table) {
         LOG_ERROR("Table '" << table_name << "' not found.");
         return;
+    }
+
+    std::vector<std::string> target_cols;
+    bool show_all = false;
+    if (cols_part == "all" || cols_part == "*") {
+        show_all = true;
+    } else {
+        std::stringstream ss(cols_part);
+        std::string c;
+        while (std::getline(ss, c, ',')) {
+            trim(c);
+            target_cols.push_back(c);
+        }
+    }
+
+    std::vector<int32_t> display_col_indices;
+    const Schema &schema = *table->schema_;
+    if (show_all) {
+        for (uint32_t i = 0; i < schema.GetColumnCount(); ++i) {
+            display_col_indices.push_back(i);
+        }
+    } else {
+        for (const auto& c : target_cols) {
+            int32_t idx = schema.GetColIdx(c);
+            if (idx == -1) {
+                LOG_ERROR("Column '" << c << "' not found for selection.");
+                return;
+            }
+            display_col_indices.push_back(idx);
+        }
     }
 
     std::string col_name, val_str;
@@ -114,9 +153,8 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
         }
     }
 
-    const Schema &schema = *table->schema_;
-    for (const auto &col : schema.GetColumns()) {
-        std::cout << std::left << std::setw(20) << col.GetName() << " | ";
+    for (int32_t idx : display_col_indices) {
+        std::cout << std::left << std::setw(20) << schema.GetColumn(idx).GetName() << " | ";
     }
     std::cout << "\n------------------------------------------------------\n";
 
@@ -135,8 +173,8 @@ void ExecuteShowAll(Catalog &catalog, const std::string &query) {
         }
 
         if (match) {
-            for (uint32_t i = 0; i < schema.GetColumnCount(); ++i) {
-                std::cout << std::left << std::setw(20) << tuple.GetValue(&schema, i).ToString() << " | ";
+            for (int32_t idx : display_col_indices) {
+                std::cout << std::left << std::setw(20) << tuple.GetValue(&schema, idx).ToString() << " | ";
             }
             std::cout << "\n";
             count++;
@@ -285,7 +323,9 @@ bool ExecuteChangeTable(Catalog &catalog, const std::string &query, bool is_repl
     std::string table_name = query.substr(7, set_pos - 7);
     trim(table_name);
 
-    std::string assgn_part = query.substr(set_pos + 5);
+    size_t where_pos = query.find(" where ", set_pos);
+    std::string assgn_part = (where_pos == std::string::npos) ? query.substr(set_pos + 5) : query.substr(set_pos + 5, where_pos - (set_pos + 5));
+
     size_t eq_pos = assgn_part.find('=');
     if (eq_pos == std::string::npos) {
         LOG_ERROR("Syntax error: missing '=' in set clause.");
@@ -309,21 +349,63 @@ bool ExecuteChangeTable(Catalog &catalog, const std::string &query, bool is_repl
          return false;
     }
 
+    int32_t filter_col_idx = -1;
+    std::string filter_val_str;
+    if (where_pos != std::string::npos) {
+        std::string cond_part = query.substr(where_pos + 7);
+        trim(cond_part);
+
+        size_t cond_eq_pos = cond_part.find('=');
+        if (cond_eq_pos == std::string::npos) {
+             LOG_ERROR("Syntax error: missing '=' in where clause.");
+             return false;
+        }
+        
+        std::string f_col_name = cond_part.substr(0, cond_eq_pos);
+        filter_val_str = cond_part.substr(cond_eq_pos + 1);
+        trim(f_col_name); trim(filter_val_str);
+        if (!filter_val_str.empty() && filter_val_str.back() == ';') filter_val_str.pop_back();
+
+        filter_col_idx = table->schema_->GetColIdx(f_col_name);
+        if (filter_col_idx == -1) {
+            LOG_ERROR("Column not found in where clause.");
+            return false;
+        }
+    }
+
     TypeId t = table->schema_->GetColumn(col_idx).GetType();
     Value new_val;
     if (t == TypeId::INTEGER) {
         new_val = Value(std::stoi(val_str));
     } else {
-        if (val_str.front() == '\'' && val_str.back() == '\'') {
+        if ((val_str.front() == '\'' && val_str.back() == '\'') || 
+            (val_str.front() == '"' && val_str.back() == '"')) {
             val_str = val_str.substr(1, val_str.size() - 2);
         }
         new_val = Value(val_str);
     }
 
+    size_t updated = 0;
     for (auto &tuple : table->tuples_) {
-        tuple.SetValue(col_idx, new_val);
+        bool match = true;
+        if (filter_col_idx != -1) {
+            Value v = tuple.GetValue(table->schema_.get(), filter_col_idx);
+            match = false;
+            if (v.GetTypeId() == TypeId::INTEGER && std::to_string(v.GetAsInt()) == filter_val_str) match = true;
+            if (v.GetTypeId() == TypeId::VARCHAR && v.GetAsString() == filter_val_str) match = true;
+            if (v.GetTypeId() == TypeId::VARCHAR && ((filter_val_str.front() == '\'' && filter_val_str.back() == '\'') || 
+                                                     (filter_val_str.front() == '"' && filter_val_str.back() == '"'))) {
+                 std::string unquoted = filter_val_str.substr(1, filter_val_str.size() - 2);
+                 if (v.GetAsString() == unquoted) match = true;
+            }
+        }
+
+        if (match) {
+            tuple.SetValue(col_idx, new_val);
+            updated++;
+        }
     }
-    if (!is_replaying) LOG_INFO("Updated " << table->tuples_.size() << " rows.");
+    if (!is_replaying) LOG_INFO("Updated " << updated << " rows.");
     return true;
 }
 
@@ -447,8 +529,8 @@ int main(int argc, char* argv[]) {
             ExecuteShowDatabase(*catalog, db_file);
         } else if (query.rfind("make table", 0) == 0) {
             if (ExecuteMakeTable(*catalog, query)) AppendToLog(db_file, query);
-        } else if (query.rfind("show all from", 0) == 0) {
-            ExecuteShowAll(*catalog, query);
+        } else if (query.rfind("show ", 0) == 0 && query.find(" from ") != std::string::npos) {
+            ExecuteShow(*catalog, query);
         } else if (query.rfind("remove from", 0) == 0) {
             if (ExecuteRemoveFrom(*catalog, query)) AppendToLog(db_file, query);
         } else if (query.rfind("delete from", 0) == 0) {
